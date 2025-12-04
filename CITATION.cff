@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: de Saraca
+    given-names: Stefano
+    orcid: https://orcid.org/0009-0005-7523-7103
+  - family-names: Tuzi
+    given-names: Simone
+title: "Neural Networks Traffic Flow Prediction"
+version: 1.0
+license: MIT
+repository-code: "https://github.com/stebtc04/nn-traffic-flow-prediction"
+type: software
+year: 2025
