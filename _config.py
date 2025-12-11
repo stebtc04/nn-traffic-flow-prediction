@@ -7,6 +7,10 @@ class TFTConfig(BaseModel):
     BATCH_SIZE: int = 64
     MAX_EPOCHS: int = 30
     LEARNING_RATE: float = 3e-4
+    DATE_COL: str
+    DATE_COL = "date"  # YYYY-MM-DD or similar
+    TIME_COL = "hour_start"  # hour as padded int
+    TARGET_COLS = ["volume", "mean_speed", "percentile_85"]
 
     class Config:
         frozen=True
