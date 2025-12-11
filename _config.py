@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+import torch
 
 class TFTConfig(BaseModel):
     MODEL_DIR: str = "./tft_checkpoints"
@@ -25,3 +26,9 @@ class Targets(BaseModel):
         frozen=True
 
 
+class GlobalConfig(BaseModel):
+    SERIES_ID: str = "series_0"
+    GPU: str = "gpu" if torch.cuda.is_available() else "cpu"
+
+    class Config:
+        frozen=True

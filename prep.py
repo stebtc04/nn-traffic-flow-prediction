@@ -11,7 +11,6 @@ from pytorch_forecasting import TimeSeriesDataSet
 
 class Preprocessor(BaseModel):
     data: pd.DataFrame
-    verbose: bool
 
     def _encode_cyclical(self, columns: list[str]) -> None:
         ...
