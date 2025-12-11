@@ -12,6 +12,9 @@ from pytorch_forecasting import TimeSeriesDataSet
 class Preprocessor(BaseModel):
     data: pd.DataFrame
 
+    class Config:
+        arbitrary_types_allowed = True
+
     def _encode_cyclical(self, columns: list[str]) -> None:
         ...
 

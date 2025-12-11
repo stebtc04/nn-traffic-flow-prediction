@@ -30,7 +30,7 @@ def init() -> None:
     return None
 
 def load(fp: os.PathLike | Path) -> pd.DataFrame:
-    return pd.read_csv(fp, separator=";", encoding="utf-8")
+    return pd.read_csv(fp, sep=";", encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -337,3 +337,4 @@ dependencies:
       - clean-text==0.6.0
       - emoji==1.7.0
       - ftfy==6.3.1
+      - intel-openmp
