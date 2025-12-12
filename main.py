@@ -38,7 +38,7 @@ if __name__ == "__main__":
     prep = Preprocessor(data=load(Path.cwd() / "47408V625213_speeds.csv"))
 
     prep.standard_preprocess()
-    train_ds, test_ds, val_ds, train_dl, test_dl, val_dl = prep.nn_preprocess()
+    train_ds, val_ds, test_ds, train_dl, val_dl, test_dl = prep.nn_preprocess()
 
     model, trainer = train(
        train_dataset=train_ds,

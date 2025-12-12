@@ -36,7 +36,7 @@ class Preprocessor(BaseModel):
         arbitrary_types_allowed = True
 
 
-    def _impute_missing_values(self, data: pd.DataFrame, r: str = "gamma") -> pd.DataFrame:
+    def _impute_missing_values(self, cols: list[str], data: pd.DataFrame, r: str = "gamma") -> pd.DataFrame:
         if r not in cast(dict, RegressorTypes.model_fields).keys():  # cast is used to silence static type checker warnings
             raise ValueError(
                 f"Regressor type '{r}' is not supported. Must be one of: {cast(dict, RegressorTypes.model_fields).keys()}")
@@ -66,12 +66,14 @@ class Preprocessor(BaseModel):
             initial_strategy="mean"
         )  # Imputation order is set to arabic so that the imputations start from the right (so from the traffic volume columns)
 
-        return pd.DataFrame(mice_imputer.fit_transform(data), columns=self.data.columns)  # Fitting the imputer and processing all the data columns except the date one #TODO BOTTLENECK. MAYBE USE POLARS LazyFrame or PyArrow?
+        return pd.DataFrame(mice_imputer.fit_transform(data), columns=cols)  # Fitting the imputer and processing all the data columns except the date one #TODO BOTTLENECK. MAYBE USE POLARS LazyFrame or PyArrow?
 
 
     def standard_preprocess(self, series_id: str = "series_0") -> pd.DataFrame:
         if self.data.empty:
             raise Exception("Empty file detected! Try with another one")
+
+        imputation_columns = [*TFTConfig.TARGET_COLS, *TFTConfig.KNOWN_REALS]
 
         self.data["coverage"] = self.data["coverage"].replace(",", ".", regex=True).astype("float") * 100
         self.data["mean_speed"] = self.data["mean_speed"].replace(",", ".", regex=True).astype("float")
@@ -97,19 +99,22 @@ class Preprocessor(BaseModel):
             .reset_index()
         )
 
-        print(self.data.columns)
-        print([[*TFTConfig.TARGET_COLS, *TFTConfig.KNOWN_REALS]]) #TODO date is missing
-
-        self.data[[*TFTConfig.TARGET_COLS, *TFTConfig.KNOWN_REALS]] = self._impute_missing_values(self.data[[*TFTConfig.TARGET_COLS, *TFTConfig.KNOWN_REALS]], r="gamma")
+        self.data[imputation_columns] = self._impute_missing_values(data=self.data[imputation_columns], r="gamma", cols=imputation_columns)
 
         print(self.data.columns)
         print(self.data.head(5))
         print(self.data.dtypes)
         print(self.data.isna().sum())
 
-        # Set or create group id (series identifier) - single series by default
+        # ----- GROUP ID (TFT requirement) -----
         self.data["series_id"] = series_id
-        self.data["time_idx"] = (self.data.groupby("series_id")["date"].rank(method="dense").astype(int) - 1) # Monotonically increasing time_idx per series
+
+        # ----- FIXED, SAFE time_idx -----
+        # Sort chronologically first
+        self.data = self.data.sort_values(["series_id", "date"]).reset_index(drop=True)
+
+        # Global sequential time index per series (required by TFT)
+        self.data["time_idx"] = self.data.groupby("series_id").cumcount()
 
         return self.data
 
@@ -137,10 +142,13 @@ class Preprocessor(BaseModel):
 
         test_cutoff = self.data["time_idx"].max() - max_prediction_length
 
+        train_data = self.data[self.data["time_idx"] <= training_cutoff].copy()
+        val_data = self.data[self.data["time_idx"] > training_cutoff].copy()
+        test_data = self.data[self.data["time_idx"] > test_cutoff].copy()
 
         # TimeSeriesDataSet is needed for PyTorch-Forecasting models
-        data = TimeSeriesDataSet(
-            self.data,
+        train_tsds = TimeSeriesDataSet(
+            train_data,
             time_idx="time_idx",
             target=TFTConfig.TARGET_COLS,  # For multi-targets, TimeSeriesDataSet supports passing target as list
             group_ids=["series_id"],
@@ -157,17 +165,20 @@ class Preprocessor(BaseModel):
             target_normalizer=target_normalizer
         )
 
-        # Split data into training, testing and validation
-        train_data = data.filter(lambda x: x["time_idx"].max() <= training_cutoff)
-        test_data = data.filter(lambda x: x["time_idx"].max() > test_cutoff - max_encoder_length)
-        val_data = data.filter(lambda x: x["time_idx"].max() > training_cutoff)
+        val_tsds = TimeSeriesDataSet.from_dataset(
+            train_data, val_data, predict=True, stop_randomization=True
+        )
+
+        test_tsds = TimeSeriesDataSet.from_dataset(
+            train_data, test_data, predict=True, stop_randomization=True
+        )
 
         # Dataloaders wrap an iterable around the dataset to enable easy access to the samples when training models
-        train_dataloader = train_data.to_dataloader(train=True, batch_size=TFTConfig.BATCH_SIZE, num_workers=0)
-        test_dataloader = test_data.to_dataloader(train=False, batch_size=TFTConfig.BATCH_SIZE, num_workers=0)
-        val_dataloader = val_data.to_dataloader(train=False, batch_size=TFTConfig.BATCH_SIZE, num_workers=0)
+        train_dataloader = train_tsds.to_dataloader(train=True, batch_size=TFTConfig.BATCH_SIZE, num_workers=0)
+        val_dataloader = val_tsds.to_dataloader(train=False, batch_size=TFTConfig.BATCH_SIZE, num_workers=0)
+        test_dataloader = test_tsds.to_dataloader(train=False, batch_size=TFTConfig.BATCH_SIZE, num_workers=0)
 
-        return train_data, test_data, val_data, train_dataloader, test_dataloader, val_dataloader
+        return train_tsds, val_tsds, test_tsds, train_dataloader, val_dataloader, test_dataloader
 
 
 
