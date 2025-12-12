@@ -12,6 +12,7 @@ class TFTConfig(BaseModel):
     DATE_COL: ClassVar[str] = "date"  # YYYY-MM-DD or similar
     TIME_COL: ClassVar[str] = "hour_start"  # hour as padded int
     TARGET_COLS: ClassVar[list[str]] = ["volume", "mean_speed", "percentile_85"]
+    KNOWN_REALS: ClassVar[list] = ["hour", "day", "month", "year"] # KNOWN_REALS are features known for both encoder + decoder (like hour, day, month, year)
 
     class Config:
         frozen=True

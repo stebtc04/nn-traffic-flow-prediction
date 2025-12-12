@@ -1,12 +1,32 @@
 from _config import TFTConfig
 import datetime
 import warnings
+from typing import cast
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
+from sklearn.linear_model import Lasso, GammaRegressor, QuantileRegressor
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import IterativeImputer
+from sklearn.tree import DecisionTreeClassifier
+
+from sklego.meta import ZeroInflatedRegressor
+
 from pytorch_forecasting.data import GroupNormalizer, MultiNormalizer
 from pytorch_forecasting import TimeSeriesDataSet
+
+pd.set_option("display.max_columns", None)
+
+
+
+class RegressorTypes(BaseModel):
+    lasso: str = "lasso"
+    gamma: str = "gamma"
+    quantile: str = "quantile"
+
+    class Config:
+        frozen=True
 
 
 class Preprocessor(BaseModel):
@@ -15,11 +35,39 @@ class Preprocessor(BaseModel):
     class Config:
         arbitrary_types_allowed = True
 
-    def _encode_cyclical(self, columns: list[str]) -> None:
-        ...
 
-    def _decode_cyclical(self, columns: list[str]) -> None:
-        ...
+    def _impute_missing_values(self, data: pd.DataFrame, r: str = "gamma") -> pd.DataFrame:
+        if r not in cast(dict, RegressorTypes.model_fields).keys():  # cast is used to silence static type checker warnings
+            raise ValueError(
+                f"Regressor type '{r}' is not supported. Must be one of: {cast(dict, RegressorTypes.model_fields).keys()}")
+
+        reg = None
+        if r == "lasso":
+            reg = ZeroInflatedRegressor(
+                regressor=Lasso(random_state=100, fit_intercept=True),
+                classifier=DecisionTreeClassifier(random_state=100)
+            )  # Using Lasso regression (L1 Penalization) to get better results in case of non-informative columns present in the data (coverage data, because their values all the same)
+        elif r == "gamma":
+            reg = ZeroInflatedRegressor(
+                regressor=GammaRegressor(fit_intercept=True, verbose=0),
+                classifier=DecisionTreeClassifier(random_state=100)
+            )  # Using Gamma regression to address for the zeros present in the data (which will need to be predicted as well)
+        elif r == "quantile":
+            reg = ZeroInflatedRegressor(
+                regressor=QuantileRegressor(fit_intercept=True),
+                classifier=DecisionTreeClassifier(random_state=100)
+            )
+
+        mice_imputer = IterativeImputer(
+            estimator=reg,
+            random_state=100,
+            verbose=0,
+            imputation_order="roman",
+            initial_strategy="mean"
+        )  # Imputation order is set to arabic so that the imputations start from the right (so from the traffic volume columns)
+
+        return pd.DataFrame(mice_imputer.fit_transform(data), columns=self.data.columns)  # Fitting the imputer and processing all the data columns except the date one #TODO BOTTLENECK. MAYBE USE POLARS LazyFrame or PyArrow?
+
 
     def standard_preprocess(self, series_id: str = "series_0") -> pd.DataFrame:
         if self.data.empty:
@@ -33,13 +81,13 @@ class Preprocessor(BaseModel):
         self.data["day"] = self.data["date"].dt.day.astype(np.int16)
         self.data["month"] = self.data["date"].dt.month.astype(np.int16)
         self.data["year"] = self.data["date"].dt.year.astype(np.int16)
+        self.data["hour_start"] = self.data["date"].dt.hour.astype(np.int16) #Overwriting the old date format with just hour integer values
 
-        #self.data = self.data.drop(columns=["date", "hour_start"]) #TODO NO
         self.data = self.data.rename(columns={"traffic_volume": "volume", "hour_start": "hour"})
 
         self.data = (
             self.data
-            .groupby(['year', 'month', 'day', 'hour'])
+            .groupby(['date', 'year', 'month', 'day', 'hour'])
             .agg({
                 'mean_speed': 'median', # Average across lanes
                 'percentile_85': 'median',  # Average of 85th percentile speeds
@@ -49,20 +97,25 @@ class Preprocessor(BaseModel):
             .reset_index()
         )
 
-        # Creating timestamp index: combine date + hour
-        self.data["timestamp"] = self.data[TFTConfig.DATE_COL] + pd.to_timedelta(self.data["hour"], unit="h")
-        self.data = self.data.sort_values("timestamp").reset_index(drop=True)
+        print(self.data.columns)
+        print([[*TFTConfig.TARGET_COLS, *TFTConfig.KNOWN_REALS]]) #TODO date is missing
+
+        self.data[[*TFTConfig.TARGET_COLS, *TFTConfig.KNOWN_REALS]] = self._impute_missing_values(self.data[[*TFTConfig.TARGET_COLS, *TFTConfig.KNOWN_REALS]], r="gamma")
+
+        print(self.data.columns)
+        print(self.data.head(5))
+        print(self.data.dtypes)
+        print(self.data.isna().sum())
 
         # Set or create group id (series identifier) - single series by default
         self.data["series_id"] = series_id
-        self.data["time_idx"] = (self.data.groupby("series_id")["timestamp"].rank(method="dense").astype(int) - 1) # Monotonically increasing time_idx per series
+        self.data["time_idx"] = (self.data.groupby("series_id")["date"].rank(method="dense").astype(int) - 1) # Monotonically increasing time_idx per series
 
         return self.data
 
 
     def nn_preprocess(self):
 
-        known_reals: list = ["hour", "day", "month", "year"] # known_reals are features known for both encoder + decoder (like hour, day, month, year)
         unknown_reals: list = TFTConfig.TARGET_COLS  # PyTorch Forecasting handles targets separately
         # These two variables are needed for model to learn from past target values (unknown reals) and predict multiple targets
 
@@ -96,7 +149,7 @@ class Preprocessor(BaseModel):
             min_prediction_length=max_prediction_length,
             max_prediction_length=max_prediction_length,
             static_reals=[],
-            time_varying_known_reals=known_reals,
+            time_varying_known_reals=TFTConfig.KNOWN_REALS,
             time_varying_unknown_reals=TFTConfig.TARGET_COLS,  # We declare targets as "unknown reals"
             add_relative_time_idx=True,
             add_target_scales=True,

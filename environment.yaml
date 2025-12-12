@@ -266,7 +266,7 @@ dependencies:
   - rpds-py=0.29.0=py311hf51aa87_0
   - rsa=4.9.1=pyhd8ed1ab_0
   - ruff=0.14.5=h15e3a1f_0
-  - scikit-learn=1.7.2=py311h8a15ebc_0
+  - scikit-learn=1.6.1=py311hdcb8d17_0
   - scikit-lego=0.9.1=pyhd8ed1ab_0
   - scipy=1.16.2=py311h9a1c30b_0
   - scs=3.2.9=default_py311hd5dc5f8_1
