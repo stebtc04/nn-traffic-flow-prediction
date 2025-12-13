@@ -87,64 +87,87 @@ def train(train_dataset: TimeSeriesDataSet,
     return best_model, trainer
 
 
-def evaluate(model: TemporalFusionTransformer, test_dataloader) -> tuple[dict[str, Any], Prediction]:
+def evaluate(
+    model: TemporalFusionTransformer,
+    test_dataloader
+) -> tuple[dict[str, Any], Prediction]:
 
-    preds_data = model.predict(test_dataloader, return_index=True, trainer_kwargs=dict(accelerator="cpu")) #The predict() method returns a Prediction object
+    # TFT built-in prediction (kept as you had it)
+    preds_data = model.predict(
+        test_dataloader,
+        return_index=True,
+        trainer_kwargs=dict(accelerator="cpu")
+    )
 
-    # Evaluating target-wise metrics by comparing decoder horizon predictions to actuals
     actuals = []
     preds = []
 
-    # Iterating through test_dataloader to gather the ground truth and the predictions
     device = model.device
     model.to(device)
+    model.eval()
 
-    for batch in test_dataloader:
-        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()} # Device is a specific dtype used in PyTorch-Forecasting
-        with torch.no_grad():
-            out = model(batch) # out has shape: (batch_size, prediction_length, output_size)
+    with torch.no_grad():
+        for x, y in test_dataloader:
+            # move inputs to device
+            x = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in x.items()}
 
-        if isinstance(out, dict) and "prediction" in out:
-            batch_preds = out["prediction"].cpu().numpy()
-        elif hasattr(out, "detach"):
-            batch_preds = out.detach().cpu().numpy()
-        else:
-            batch_preds = np.array(out)
+            out = model(x)
+            #print(out)
 
-        # Targets' values usually lie in batch["decoder_target"]
-        if "decoder_target" in batch:
-            batch_target = batch["decoder_target"].cpu().numpy()
-        elif "target" in batch:
-            batch_target = batch["target"].cpu().numpy()
-        else:
-            batch_target = None
+            pred = out["prediction"]
+            if isinstance(pred, list):
+                pred = torch.cat(pred, dim=-1)
+            batch_preds = pred.cpu().numpy()
 
-        if batch_target is not None:
+            if isinstance(y, tuple):
+                y = y[0]  # drop weights
+
+            if isinstance(y, list):
+                y = torch.stack(y, dim=-1)
+
+            batch_target = y.cpu().numpy()
+
             preds.append(batch_preds)
             actuals.append(batch_target)
 
     if preds and actuals:
-        preds = np.concatenate(preds, axis=0) # preds shape: (N, prediction_length, output_size)
-        actuals = np.concatenate(actuals, axis=0) # actuals shape: (N, prediction_length, number_of_targets)
+        preds = np.concatenate(preds, axis=0)
+        actuals = np.concatenate(actuals, axis=0)
 
-        # Computing metrics target-wise
         metrics = {"MAE": [], "RMSE": [], "MAPE": []}
+
         for i in range(actuals.shape[-1]):
             y_true = actuals[..., i].ravel()
             y_pred = preds[..., i].ravel()
+
             mae = np.mean(np.abs(y_true - y_pred))
             rmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
-            mape = np.mean(np.abs((y_true - y_pred) / np.where(y_true == 0, 1e-8, y_true))) * 100 # MAPE: avoiding division by zero with np.where()
+            mape = (
+                np.mean(
+                    np.abs(
+                        (y_true - y_pred)
+                        / np.where(y_true == 0, 1e-8, y_true)
+                    )
+                ) * 100
+            )
 
             metrics["MAE"].append(mae)
             metrics["RMSE"].append(rmse)
             metrics["MAPE"].append(mape)
 
-        # Aggregate metrics
         metrics_summary = {
-            *{f"MAE_{TFTConfig.TARGET_COLS[i]}": metrics["MAE"][i] for i in range(len(TFTConfig.TARGET_COLS))},
-            *{f"RMSE_{TFTConfig.TARGET_COLS[i]}": metrics["RMSE"][i] for i in range(len(TFTConfig.TARGET_COLS))},
-            *{f"MAPE_{TFTConfig.TARGET_COLS[i]}": metrics["MAPE"][i] for i in range(len(TFTConfig.TARGET_COLS))}
+            **{
+                f"MAE_{TFTConfig.TARGET_COLS[i]}": metrics["MAE"][i]
+                for i in range(len(TFTConfig.TARGET_COLS))
+            },
+            **{
+                f"RMSE_{TFTConfig.TARGET_COLS[i]}": metrics["RMSE"][i]
+                for i in range(len(TFTConfig.TARGET_COLS))
+            },
+            **{
+                f"MAPE_{TFTConfig.TARGET_COLS[i]}": metrics["MAPE"][i]
+                for i in range(len(TFTConfig.TARGET_COLS))
+            },
         }
     else:
         metrics_summary = {}
