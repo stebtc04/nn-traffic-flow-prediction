@@ -13,11 +13,11 @@ import torch
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor
 from lightning.pytorch.loggers import TensorBoardLogger
-from pytorch_lightning import Trainer, seed_everything
+from lightning.pytorch import Trainer, seed_everything
 from pytorch_forecasting.models.base import Prediction
-from pytorch_forecasting import Baseline, TimeSeriesDataSet, TemporalFusionTransformer, QuantileLoss
+from pytorch_forecasting import BaseModel, TimeSeriesDataSet, TemporalFusionTransformer, QuantileLoss, MultiLoss
 from pytorch_forecasting.metrics import MAE, RMSE, MAPE
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
 from pytorch_forecasting.models.temporal_fusion_transformer.tuning import (
     optimize_hyperparameters,
 )
@@ -36,18 +36,17 @@ def train(train_dataset: TimeSeriesDataSet,
           learning_rate: float = TFTConfig.LEARNING_RATE,
           model_dir: str = TFTConfig.MODEL_DIR,
           ) -> tuple[TemporalFusionTransformer | Trainer]:
-    
+
+
     model = TemporalFusionTransformer.from_dataset(
         train_dataset,
-        learning_rate=learning_rate,
-        hidden_size=256,  # The size of LSTM layers
+        learning_rate=TFTConfig.LEARNING_RATE,
+        hidden_size=32,
         attention_head_size=4,
         dropout=0.1,
-        hidden_continuous_size=64,
-        output_size=len(TFTConfig.TARGET_COLS) * 3,
-        loss=QuantileLoss(),
-        log_interval=10,
-        reduce_on_plateau_patience=4,
+        hidden_continuous_size=16,
+        loss=QuantileLoss(quantiles=[0.5]), #Using the median (0.5 quantile)
+        reduce_on_plateau_patience=4
     )
 
     # Callbacks
@@ -56,7 +55,7 @@ def train(train_dataset: TimeSeriesDataSet,
         filename="tft-{epoch:02d}-{val_loss:.4f}",
         save_top_k=1,
         monitor="val_loss",
-        mode="min",
+        mode="min"
     )
 
     trainer = Trainer(
@@ -69,13 +68,13 @@ def train(train_dataset: TimeSeriesDataSet,
             LearningRateMonitor()
         ],
         default_root_dir=model_dir,
-        gradient_clip_val=0.1,
+        gradient_clip_val=0.1
     )
 
     trainer.fit(
         model,
         train_dataloaders=train_dataloader,
-        val_dataloaders=val_dataloader,
+        val_dataloaders=val_dataloader
     )
 
     # Loading the best model

@@ -106,10 +106,8 @@ class Preprocessor(BaseModel):
         print(self.data.dtypes)
         print(self.data.isna().sum())
 
-        # ----- GROUP ID (TFT requirement) -----
         self.data["series_id"] = series_id
 
-        # ----- FIXED, SAFE time_idx -----
         # Sort chronologically first
         self.data = self.data.sort_values(["series_id", "date"]).reset_index(drop=True)
 
@@ -121,64 +119,92 @@ class Preprocessor(BaseModel):
 
     def nn_preprocess(self):
 
-        unknown_reals: list = TFTConfig.TARGET_COLS  # PyTorch Forecasting handles targets separately
-        # These two variables are needed for model to learn from past target values (unknown reals) and predict multiple targets
+        ENC = TFTConfig.ENCODER_LENGTH  # 168
+        DEC = TFTConfig.DECODER_LENGTH  # 24
 
-        max_encoder_length: int = TFTConfig.ENCODER_LENGTH
-        max_prediction_length: int = TFTConfig.DECODER_LENGTH
-
-        # Use MultiNormalizer for multi-target normalization (targets are a list)
-        # Each group's target distribution is normalized separately via GroupNormalizer inside MultiNormalizer
+        # Normalizer definition
         try:
-            target_normalizer = MultiNormalizer([GroupNormalizer(groups=["series_id"]) for _ in TFTConfig.TARGET_COLS])
+            target_normalizer = MultiNormalizer(
+                [GroupNormalizer(groups=["series_id"]) for _ in TFTConfig.TARGET_COLS]
+            )
         except:
-            # Fallback
-            warnings.warn("MultiNormalizer not available; falling back to single GroupNormalizer on first target")
+            warnings.warn("MultiNormalizer not available. Using GroupNormalizer.")
             target_normalizer = GroupNormalizer(groups=["series_id"])
 
-        training_cutoff = self.data["time_idx"].max() - max_prediction_length - 365  # Leaving about 1 year for validation and testing if possible
-        if training_cutoff < max_encoder_length + max_prediction_length:
-            training_cutoff = int(self.data["time_idx"].max() * 0.75) #In case there's particularly few data, we're leaving a little bit of data for the validation set by taking less of it for training
+        horizon = ENC + DEC
 
-        test_cutoff = self.data["time_idx"].max() - max_prediction_length
+        # The test set should have at least numer of row equal to ENC + DEC
+        max_time = self.data["time_idx"].max()
+        test_cutoff = max_time - horizon
 
-        train_data = self.data[self.data["time_idx"] <= training_cutoff].copy()
-        val_data = self.data[self.data["time_idx"] > training_cutoff].copy()
         test_data = self.data[self.data["time_idx"] > test_cutoff].copy()
 
-        # TimeSeriesDataSet is needed for PyTorch-Forecasting models
+        if len(test_data) < horizon:
+            raise RuntimeError(f"The test set is too small. At least {horizon} rows are needed, but only {len(test_data)} are available")
+
+        # The validation set should also have at least number rows equal to ENC + DEC
+        val_cutoff = test_cutoff - horizon
+        val_data = self.data[(self.data["time_idx"] > val_cutoff) & (self.data["time_idx"] <= test_cutoff)].copy()
+
+        if len(val_data) < horizon:
+            raise RuntimeError(f"The validation set is too small. At least {horizon} rows are needed, but only {len(val_data)} are available")
+
+        # Everything before validation cutoff becomes train
+        train_data = self.data[self.data["time_idx"] <= val_cutoff].copy()
+
+        print(f"Train rows: {len(train_data)}")
+        print(f"Val rows:   {len(val_data)}")
+        print(f"Test rows:  {len(test_data)}")
+
         train_tsds = TimeSeriesDataSet(
             train_data,
             time_idx="time_idx",
-            target=TFTConfig.TARGET_COLS,  # For multi-targets, TimeSeriesDataSet supports passing target as list
+            target=TFTConfig.TARGET_COLS,
             group_ids=["series_id"],
-            min_encoder_length=max_encoder_length,  # Allowing variable encoder length
-            max_encoder_length=max_encoder_length,
-            min_prediction_length=max_prediction_length,
-            max_prediction_length=max_prediction_length,
+            min_encoder_length=ENC,
+            max_encoder_length=ENC,
+            min_prediction_length=DEC,
+            max_prediction_length=DEC,
             static_reals=[],
             time_varying_known_reals=TFTConfig.KNOWN_REALS,
-            time_varying_unknown_reals=TFTConfig.TARGET_COLS,  # We declare targets as "unknown reals"
+            time_varying_unknown_reals=TFTConfig.TARGET_COLS,
+            target_normalizer=target_normalizer,
             add_relative_time_idx=True,
             add_target_scales=True,
             add_encoder_length=True,
-            target_normalizer=target_normalizer
         )
 
         val_tsds = TimeSeriesDataSet.from_dataset(
-            train_data, val_data, predict=True, stop_randomization=True
+            train_tsds,
+            val_data,
+            predict=True,
+            stop_randomization=True
         )
 
         test_tsds = TimeSeriesDataSet.from_dataset(
-            train_data, test_data, predict=True, stop_randomization=True
+            train_tsds,
+            test_data,
+            predict=True,
+            stop_randomization=True
         )
 
-        # Dataloaders wrap an iterable around the dataset to enable easy access to the samples when training models
-        train_dataloader = train_tsds.to_dataloader(train=True, batch_size=TFTConfig.BATCH_SIZE, num_workers=0)
-        val_dataloader = val_tsds.to_dataloader(train=False, batch_size=TFTConfig.BATCH_SIZE, num_workers=0)
-        test_dataloader = test_tsds.to_dataloader(train=False, batch_size=TFTConfig.BATCH_SIZE, num_workers=0)
+        train_dl = train_tsds.to_dataloader(
+            train=True,
+            batch_size=TFTConfig.BATCH_SIZE,
+            num_workers=0
+        )
+        val_dl = val_tsds.to_dataloader(
+            train=False,
+            batch_size=TFTConfig.BATCH_SIZE,
+            num_workers=0
+        )
+        test_dl = test_tsds.to_dataloader(
+            train=False,
+            batch_size=TFTConfig.BATCH_SIZE,
+            num_workers=0
+        )
 
-        return train_tsds, val_tsds, test_tsds, train_dataloader, val_dataloader, test_dataloader
+        return train_tsds, val_tsds, test_tsds, train_dl, val_dl, test_dl
 
 
 
