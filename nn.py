@@ -43,7 +43,7 @@ def train(train_dataset: TimeSeriesDataSet,
         dropout=0.01,
         hidden_continuous_size=16,
         loss=QuantileLoss(quantiles=[0.5]), #Using the median (0.5 quantile)
-        reduce_on_plateau_patience=8 #TODO 8
+        reduce_on_plateau_patience=8, #TODO 8
     ).to(GlobalConfig.DEVICE) #TODO 12
 
     # Callbacks

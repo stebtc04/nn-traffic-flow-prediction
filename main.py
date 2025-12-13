@@ -51,6 +51,8 @@ if __name__ == "__main__":
     for k, v in metrics_summary.items():
         print(f"  {k}: {v:.4f}")
 
+    plot_training(trainer=trainer)
+
     print("Model saved to:", trainer.checkpoint_callback.best_model_path) # Save best model checkpoint path
 
     preds_out_path = Path(TFTConfig.MODEL_DIR) / "predictions.csv"
