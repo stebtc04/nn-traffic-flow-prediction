@@ -1,4 +1,4 @@
-from _config import TFTConfig
+from _config import GlobalConfig, TFTConfig
 import os
 import math
 import datetime
@@ -7,6 +7,7 @@ from typing import cast
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel
+from astral.sun import sun
 
 from sklearn.linear_model import Lasso, GammaRegressor, QuantileRegressor
 from sklearn.experimental import enable_iterative_imputer
@@ -36,6 +37,51 @@ class Preprocessor(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
+
+
+    @staticmethod
+    def get_season(date: pd.Timestamp):
+        return next(
+            (season for season, (start, end) in GlobalConfig.SEASONS.items()
+             if start <= pd.Timestamp(GlobalConfig.FALLBACK_YEAR, date.month, date.day) <= end),
+            "winter"  # Fallback season set as default
+        )
+
+    @staticmethod
+    def get_daylight_info(date: pd.Timestamp):
+        try:
+            s = sun(GlobalConfig.REFERENCE_CITY.observer, date=date)
+            return pd.Series({
+                "daylight_hours": (s["sunset"] - s["sunrise"]).total_seconds() / 3600,
+                "polar_day": False,
+                "polar_night": False,
+            })
+
+        except ValueError as e:
+            msg = str(e).lower()
+
+            if "never sets" in msg or "never reaches" in msg:
+                return pd.Series({
+                    "daylight_hours": 24.0,
+                    "polar_day": True,
+                    "polar_night": False,
+                })
+
+            if "never rises" in msg:
+                return pd.Series({
+                    "daylight_hours": 0.0,
+                    "polar_day": False,
+                    "polar_night": True,
+                })
+
+            raise #Raising unexpected errors instead of silently hiding them
+
+    @staticmethod
+    def get_festivity(date: pd.Timestamp):
+        return next(
+            (name for name, d in GlobalConfig.FESTIVITIES.items() if d == date.strftime("%m-%d")),
+            None
+        )
 
 
     def _impute_missing_values(self, cols: list[str], data: pd.DataFrame, r: str = "gamma") -> pd.DataFrame:
@@ -110,6 +156,32 @@ class Preprocessor(BaseModel):
 
         # Global sequential time index per series (required by TFT)
         self.data["time_idx"] = self.data.groupby("series_id").cumcount()
+        
+        
+        # -------- Time-series related features --------
+        self.data["is_weekend"] = self.data["date"].dt.weekday >= 5
+        self.data["is_working_day"] = ~self.data["is_weekend"]
+        self.data["season"] = self.data["date"].apply(self.get_season)
+
+        self.data["is_holiday"] = self.data["date"].isin(GlobalConfig.COUNTRY_HOLIDAYS)
+        self.data["holiday_name"] = self.data["date"].map(GlobalConfig.COUNTRY_HOLIDAYS)
+
+        self.data["rain_mm"] = np.random.gamma(2, 1, len(self.data))
+        self.data["is_rainy_day"] = self.data["rain_mm"] > 1
+
+        rain_by_season = (
+            self.data.groupby("season")["is_rainy_day"]
+            .sum()
+        )
+        rainiest_season = rain_by_season.idxmax()
+
+        self.data["is_rainiest_season"] = self.data["season"] == rainiest_season
+        self.data = pd.concat([self.data, self.data["date"].apply(self.get_daylight_info)], axis=1) #Daylight info columns get concatenated to the main dataframe
+
+        self.data["festivity"] = self.data["date"].apply(self.get_festivity)
+        self.data["is_festivity"] = self.data["festivity"].notna()
+
+        self.data.drop(columns=["holiday_name", "festivity"], inplace=True)
 
         print(self.data.columns)
         print(self.data.head(5))

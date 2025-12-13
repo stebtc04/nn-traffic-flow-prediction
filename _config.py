@@ -1,5 +1,11 @@
 from typing import ClassVar
 from pydantic import BaseModel
+import pandas as pd
+from holidays import HolidayBase
+import holidays
+from astral import LocationInfo
+
+
 import torch
 
 class TFTConfig(BaseModel):
@@ -30,9 +36,35 @@ class Targets(BaseModel):
 class GlobalConfig(BaseModel):
     SERIES_ID: ClassVar[str] = "series_0"
     DEVICE: ClassVar[str] = "cuda" if torch.cuda.is_available() else "cpu"
+    COUNTRY_HOLIDAYS: ClassVar[HolidayBase] = holidays.country_holidays("NO", years=[2018, 2019, 2020])
+    FALLBACK_YEAR: ClassVar[int] = 2000
+    SEASONS: ClassVar[dict[str, pd.Timestamp]] = {
+        "winter": (pd.Timestamp(f"{FALLBACK_YEAR}-12-21"),
+                   pd.Timestamp(f"{FALLBACK_YEAR + 1}-03-19")),
+        "spring": (pd.Timestamp(f"{FALLBACK_YEAR}-03-20"),
+                   pd.Timestamp(f"{FALLBACK_YEAR}-06-20")),
+        "summer": (pd.Timestamp(f"{FALLBACK_YEAR}-06-21"),
+                   pd.Timestamp(f"{FALLBACK_YEAR}-09-22")),
+        "autumn": (pd.Timestamp(f"{FALLBACK_YEAR}-09-23"),
+                   pd.Timestamp(f"{FALLBACK_YEAR}-12-20")),
+    }
+    REFERENCE_CITY: ClassVar[LocationInfo] = LocationInfo(
+        name="Trondheim",
+        region="Norway",
+        timezone="Europe/Oslo",
+        latitude=63.4305,
+        longitude=10.3951
+    )
+    FESTIVITIES: ClassVar[dict[str, str]] = {
+        "Christmas": "12-25",
+        "NewYear": "01-01",
+        "Halloween": "10-31",
+        "IndependenceDay": "07-04"
+    }
 
     class Config:
         frozen=True
+
 
 print(torch.version.cuda)
 print(torch.cuda.current_device())
