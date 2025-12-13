@@ -11,11 +11,10 @@ import seaborn as sns
 
 import torch
 import lightning.pytorch as pl
-from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor
 from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch import Trainer, seed_everything
 from pytorch_forecasting.models.base import Prediction
-from pytorch_forecasting import BaseModel, TimeSeriesDataSet, TemporalFusionTransformer, QuantileLoss, MultiLoss
+from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer, QuantileLoss, MultivariateNormalDistributionLoss
 from pytorch_forecasting.metrics import MAE, RMSE, MAPE
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
 from pytorch_forecasting.models.temporal_fusion_transformer.tuning import (
@@ -29,11 +28,9 @@ seed_everything(SEED)
 
 
 def train(train_dataset: TimeSeriesDataSet,
-          val_dataset: TimeSeriesDataSet,
           train_dataloader,
           val_dataloader,
           max_epochs: int = TFTConfig.MAX_EPOCHS,
-          learning_rate: float = TFTConfig.LEARNING_RATE,
           model_dir: str = TFTConfig.MODEL_DIR,
           ) -> tuple[TemporalFusionTransformer | Trainer]:
 
@@ -41,13 +38,13 @@ def train(train_dataset: TimeSeriesDataSet,
     model = TemporalFusionTransformer.from_dataset(
         train_dataset,
         learning_rate=TFTConfig.LEARNING_RATE,
-        hidden_size=32,
-        attention_head_size=4,
-        dropout=0.1,
+        hidden_size=16, #TODO 16
+        attention_head_size=8, #TODO 8
+        dropout=0.01,
         hidden_continuous_size=16,
         loss=QuantileLoss(quantiles=[0.5]), #Using the median (0.5 quantile)
-        reduce_on_plateau_patience=4
-    )
+        reduce_on_plateau_patience=8 #TODO 8
+    ).to(GlobalConfig.DEVICE) #TODO 12
 
     # Callbacks
     checkpoint_callback = ModelCheckpoint(
@@ -60,7 +57,7 @@ def train(train_dataset: TimeSeriesDataSet,
 
     trainer = Trainer(
         max_epochs=max_epochs,
-        accelerator=GlobalConfig.GPU,
+        accelerator="auto",
         devices="auto",
         callbacks=[
             EarlyStopping(monitor="val_loss", patience=8, mode="min"),
@@ -96,7 +93,7 @@ def evaluate(
     preds_data = model.predict(
         test_dataloader,
         return_index=True,
-        trainer_kwargs=dict(accelerator="cpu")
+        trainer_kwargs=dict(accelerator=GlobalConfig.DEVICE)
     )
 
     actuals = []

@@ -42,7 +42,6 @@ if __name__ == "__main__":
 
     model, trainer = train(
        train_dataset=train_ds,
-       val_dataset=val_ds,
        train_dataloader=train_dl,
        val_dataloader=val_dl
     )

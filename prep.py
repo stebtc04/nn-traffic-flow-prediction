@@ -1,4 +1,6 @@
 from _config import TFTConfig
+import os
+import math
 import datetime
 import warnings
 from typing import cast
@@ -101,11 +103,6 @@ class Preprocessor(BaseModel):
 
         self.data[imputation_columns] = self._impute_missing_values(data=self.data[imputation_columns], r="gamma", cols=imputation_columns)
 
-        print(self.data.columns)
-        print(self.data.head(5))
-        print(self.data.dtypes)
-        print(self.data.isna().sum())
-
         self.data["series_id"] = series_id
 
         # Sort chronologically first
@@ -113,6 +110,11 @@ class Preprocessor(BaseModel):
 
         # Global sequential time index per series (required by TFT)
         self.data["time_idx"] = self.data.groupby("series_id").cumcount()
+
+        print(self.data.columns)
+        print(self.data.head(5))
+        print(self.data.dtypes)
+        print(self.data.isna().sum())
 
         return self.data
 
@@ -191,17 +193,17 @@ class Preprocessor(BaseModel):
         train_dl = train_tsds.to_dataloader(
             train=True,
             batch_size=TFTConfig.BATCH_SIZE,
-            num_workers=0
+            num_workers=0,
         )
         val_dl = val_tsds.to_dataloader(
             train=False,
             batch_size=TFTConfig.BATCH_SIZE,
-            num_workers=0
+            num_workers=0,
         )
         test_dl = test_tsds.to_dataloader(
             train=False,
             batch_size=TFTConfig.BATCH_SIZE,
-            num_workers=0
+            num_workers=0,
         )
 
         return train_tsds, val_tsds, test_tsds, train_dl, val_dl, test_dl
