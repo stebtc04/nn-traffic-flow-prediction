@@ -106,7 +106,6 @@ class Preprocessor(BaseModel):
 
             is_morning_peak = 6.5 <= hour < 9.5
             is_evening_peak = 16 <= hour < 19
-            is_peak = is_morning_peak or is_evening_peak
 
             return pd.Series({
                 "is_day": sunrise <= hour < sunset,
@@ -117,7 +116,7 @@ class Preprocessor(BaseModel):
                     "afternoon" if 14 <= hour < sunset else
                     "evening"
                 ),  # A.K.A. TOD (Time Of Day) -
-                "is_peak": is_peak,
+                "is_peak": bool(is_morning_peak or is_evening_peak),
             })
         # The modelling of the time of day based on simple hour-of-the-day and not on the sun's position is due to the fact that traffic,
         # which is a human-related phenomena, is mainly determined by human customs and not by the natural context
@@ -220,8 +219,7 @@ class Preprocessor(BaseModel):
 
         # Global sequential time index per series (required by TFT)
         self.data["time_idx"] = self.data.groupby("series_id").cumcount()
-        
-        
+
         # -------- Time-series related features --------
         self.data["is_weekend"] = self.data["date"].dt.weekday >= 5
         self.data["is_working_day"] = ~self.data["is_weekend"]
@@ -251,16 +249,11 @@ class Preprocessor(BaseModel):
         self.data["is_festivity"] = self.data["festivity"].notna()
 
         self.data = pd.concat([self.data, self.data["date"].apply(self.get_time_of_day)], axis=1) #Time of day info columns get concatenated to the main dataframe
-
-        print("BEFORE CONCAT", self.data.isna().sum())
-
         self.data["time_of_day"] = pd.Categorical(
             self.data["time_of_day"],
-            categories=["night", "morning", "day", "mid-day", "afternoon", "evening"],
+            categories=["night", "morning", "mid-day", "afternoon", "evening"],
             ordered=True
         )
-
-        print("AFTER CONCAT", self.data.isna().sum())
 
         self.data.drop(columns=["holiday_name", "festivity"], inplace=True)
 
