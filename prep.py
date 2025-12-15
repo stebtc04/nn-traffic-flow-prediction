@@ -115,7 +115,7 @@ class Preprocessor(BaseModel):
                     "mid-day" if 10 <= hour < 14 else
                     "afternoon" if 14 <= hour < sunset else
                     "evening"
-                ),  # A.K.A. TOD (Time Of Day) -
+                ),  # A.K.A. TOD (Time Of Day)
                 "is_peak": bool(is_morning_peak or is_evening_peak),
             })
         # The modelling of the time of day based on simple hour-of-the-day and not on the sun's position is due to the fact that traffic,
@@ -251,7 +251,7 @@ class Preprocessor(BaseModel):
         self.data = pd.concat([self.data, self.data["date"].apply(self.get_time_of_day)], axis=1) #Time of day info columns get concatenated to the main dataframe
         self.data["time_of_day"] = pd.Categorical(
             self.data["time_of_day"],
-            categories=["night", "morning", "mid-day", "afternoon", "evening"],
+            categories=["night", "morning", "day", "mid-day", "afternoon", "evening"],
             ordered=True
         )
 
@@ -326,6 +326,7 @@ class Preprocessor(BaseModel):
             add_relative_time_idx=True,
             add_target_scales=True,
             add_encoder_length=True,
+            time_varying_known_categoricals=TFTConfig.KNOWN_CATEGORICALS
         )
 
         val_tsds = TimeSeriesDataSet.from_dataset(
