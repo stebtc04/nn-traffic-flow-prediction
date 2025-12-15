@@ -84,77 +84,64 @@ class Preprocessor(BaseModel):
         )
 
     @staticmethod
-    def get_time_of_day(date: pd.Timestamp) -> pd.Series:
+    def get_time_of_day(date: pd.Timestamp) -> pd.Series: # pd.Series[dict[str, bool | str]]:
         try:
             s = sun(
-                GlobalConfig.REFERENCE_CITY.observer,
+                GlobalConfig.REFERENCE_CITY.observer,  # This could change in case of TRPs in different cities or towns
                 date=date.date(),
                 tzinfo=GlobalConfig.REFERENCE_CITY.timezone
+                # The same as above applies here, maybe not in Norway, but yes in bigger countries cases
             )
-
-            # Some keys may exist, but may be None in polar edge cases
-            sunrise = s.get("sunrise")
-            sunset = s.get("sunset")
-            dawn = s.get("dawn")
-            dusk = s.get("dusk")
-
-            hour = date.hour + date.minute / 60
 
             # Computing the actual sunrise/sunset/dawn/dusk times to decimals to obtain a usable measure of comparison to determine the time of day (TOD)
             # Example: suppose that sunrise is at 03:37 in the morning, we want to convert that exact point of the day into a decimal value.
             # We'll say that since one hour is equal to 60 minutes, we can just compute the number of minutes divided by 60 and obtain the decimal part of the time of day.
             # In the example case this will be: 3.62 (3 hours + 0.62 hours) (0.62 hours = 37 minutes / 60 minutes)
-            sunrise_hour = sunrise.hour + sunrise.minute / 60 if sunrise else None
-            sunset_hour = sunset.hour + sunset.minute / 60 if sunset else None
-            dawn_hour = dawn.hour + dawn.minute / 60 if dawn else None
-            dusk_hour = dusk.hour + dusk.minute / 60 if dusk else None
+            sunrise = s["sunrise"].hour + s["sunrise"].minute / 60
+            sunset = s["sunset"].hour + s["sunset"].minute / 60
+            dawn = s["dawn"].hour + s["dawn"].minute / 60
+            dusk = s["dusk"].hour + s["dusk"].minute / 60
 
-            if sunrise_hour is None or sunset_hour is None:
-                # Sun never sets → midnight sun
-                return pd.Series({
-                    "is_day": True,
-                    "time_of_day": "day"
-                })
-
-            if dawn_hour is None or dusk_hour is None:
-                # Sun rises/sets but no twilight → treat as simple day/night
-                is_day = sunrise_hour <= hour < sunset_hour
-                return pd.Series({
-                    "is_day": is_day,
-                    "time_of_day": "day" if is_day else "night"
-                })
+            hour = date.hour + date.minute / 60
 
             return pd.Series({
-                "is_day": sunrise_hour <= hour < sunset_hour,
+                "is_day": sunrise <= hour < sunset,
                 "time_of_day": (
-                    "night" if hour < dawn_hour or hour >= dusk_hour else
-                    "morning" if sunrise_hour <= hour < 10 else
+                    "night" if hour < dawn or hour >= dusk else
+                    "morning" if sunrise <= hour < 10 else
                     "mid-day" if 10 <= hour < 14 else
-                    "afternoon" if 14 <= hour < sunset_hour else
+                    "afternoon" if 14 <= hour < sunset else
                     "evening"
-                )
+                )  # A.K.A. TOD (Time Of Day)
             })
 
         except ValueError as e:
             msg = str(e).lower()
 
-            # Polar cases that would raise errors
-            if "never rises" in msg:
-                return pd.Series({
-                    "is_day": False,
-                    "time_of_day": "night"
-                })
-
-            if "never sets" in msg or "never reaches" in msg:
+            if any(case in msg for case in [
+                "never reaches",
+                "never sets",
+                "unable to find a dusk time on the date specified",
+            ]):
                 return pd.Series({
                     "is_day": True,
                     "time_of_day": "day"
-                })
+                })  # Midnight sun case
 
-            raise # In case of unexpected errors raise them
+            if any(case in msg for case in
+            [
+                "never rises",
+                "unable to find a dawn time on the date specified"
+            ]):
+                return pd.Series({
+                    "is_day": False,
+                    "time_of_day": "night"
+                })  # Polar night case
 
+            raise
 
-    def _impute_missing_values(self, cols: list[str], data: pd.DataFrame, r: str = "gamma") -> pd.DataFrame:
+    @staticmethod
+    def _impute_missing_values(cols: list[str], data: pd.DataFrame, r: str = "gamma") -> pd.DataFrame:
         if r not in cast(dict, RegressorTypes.model_fields).keys():  # cast is used to silence static type checker warnings
             raise ValueError(
                 f"Regressor type '{r}' is not supported. Must be one of: {cast(dict, RegressorTypes.model_fields).keys()}")
@@ -232,6 +219,11 @@ class Preprocessor(BaseModel):
         self.data["is_weekend"] = self.data["date"].dt.weekday >= 5
         self.data["is_working_day"] = ~self.data["is_weekend"]
         self.data["season"] = self.data["date"].apply(self.get_season)
+        self.data["season"] = pd.Categorical(
+            self.data["season"],
+            categories=["winter", "spring", "summer", "autumn"],
+            ordered=True
+        )
 
         self.data["is_holiday"] = self.data["date"].isin(GlobalConfig.COUNTRY_HOLIDAYS)
         self.data["holiday_name"] = self.data["date"].map(GlobalConfig.COUNTRY_HOLIDAYS)
@@ -251,14 +243,25 @@ class Preprocessor(BaseModel):
         self.data["festivity"] = self.data["date"].apply(self.get_festivity)
         self.data["is_festivity"] = self.data["festivity"].notna()
 
-        self.data["time_of_day"] = self.data["date"].map(self.get_time_of_day)
+        self.data = pd.concat([self.data, self.data["date"].apply(self.get_time_of_day)], axis=1) #Time of day info columns get concatenated to the main dataframe
+
+        print("BEFORE CONCAT", self.data.isna().sum())
+
         self.data["time_of_day"] = pd.Categorical(
             self.data["time_of_day"],
-            categories=["night", "morning", "mid-day", "afternoon", "evening"],
+            categories=["night", "morning", "day", "mid-day", "afternoon", "evening"],
             ordered=True
         )
 
+        print("AFTER CONCAT", self.data.isna().sum())
+
         self.data.drop(columns=["holiday_name", "festivity"], inplace=True)
+
+        self.data["year"] = self.data["year"].astype("int")
+        self.data["month"] = self.data["month"].astype("int")
+        self.data["day"] = self.data["day"].astype("int")
+        self.data["hour"] = self.data["hour"].astype("int")
+        self.data["volume"] = self.data["volume"].astype("int")
 
         print(self.data.columns)
         print(self.data.head(5))

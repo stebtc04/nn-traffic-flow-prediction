@@ -340,3 +340,4 @@ dependencies:
       - intel-openmp
       - holidays
       - astral
+      - optuna-integration[pytorch_lightning]
