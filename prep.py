@@ -48,7 +48,7 @@ class Preprocessor(BaseModel):
         )
 
     @staticmethod
-    def get_daylight_info(date: pd.Timestamp) -> pd.Series[dict[str, int | bool]]:
+    def get_daylight_info(date: pd.Timestamp) -> pd.Series:# pd.Series[dict[str, float | bool]]
         try:
             s = sun(GlobalConfig.REFERENCE_CITY.observer, date=date)
             return pd.Series({
@@ -84,48 +84,74 @@ class Preprocessor(BaseModel):
         )
 
     @staticmethod
-    def get_time_of_day(date: pd.Timestamp) -> pd.Series[dict[str, bool | str]]:
+    def get_time_of_day(date: pd.Timestamp) -> pd.Series:
         try:
             s = sun(
-                GlobalConfig.REFERENCE_CITY.observer, #This could change in case of TRPs in different cities or towns
+                GlobalConfig.REFERENCE_CITY.observer,
                 date=date.date(),
-                tzinfo=GlobalConfig.REFERENCE_CITY.timezone #The same as above applies here, maybe not in Norway, but yes in bigger countries cases
+                tzinfo=GlobalConfig.REFERENCE_CITY.timezone
             )
 
-            sunrise = s["sunrise"].hour + s["sunrise"].minute / 60
-            sunset = s["sunset"].hour + s["sunset"].minute / 60
-            dawn = s["dawn"].hour + s["dawn"].minute / 60
-            dusk = s["dusk"].hour + s["dusk"].minute / 60
+            # Some keys may exist, but may be None in polar edge cases
+            sunrise = s.get("sunrise")
+            sunset = s.get("sunset")
+            dawn = s.get("dawn")
+            dusk = s.get("dusk")
 
             hour = date.hour + date.minute / 60
 
+            # Computing the actual sunrise/sunset/dawn/dusk times to decimals to obtain a usable measure of comparison to determine the time of day (TOD)
+            # Example: suppose that sunrise is at 03:37 in the morning, we want to convert that exact point of the day into a decimal value.
+            # We'll say that since one hour is equal to 60 minutes, we can just compute the number of minutes divided by 60 and obtain the decimal part of the time of day.
+            # In the example case this will be: 3.62 (3 hours + 0.62 hours) (0.62 hours = 37 minutes / 60 minutes)
+            sunrise_hour = sunrise.hour + sunrise.minute / 60 if sunrise else None
+            sunset_hour = sunset.hour + sunset.minute / 60 if sunset else None
+            dawn_hour = dawn.hour + dawn.minute / 60 if dawn else None
+            dusk_hour = dusk.hour + dusk.minute / 60 if dusk else None
+
+            if sunrise_hour is None or sunset_hour is None:
+                # Sun never sets → midnight sun
+                return pd.Series({
+                    "is_day": True,
+                    "time_of_day": "day"
+                })
+
+            if dawn_hour is None or dusk_hour is None:
+                # Sun rises/sets but no twilight → treat as simple day/night
+                is_day = sunrise_hour <= hour < sunset_hour
+                return pd.Series({
+                    "is_day": is_day,
+                    "time_of_day": "day" if is_day else "night"
+                })
+
             return pd.Series({
-                "is_day": sunrise <= hour < sunset,
+                "is_day": sunrise_hour <= hour < sunset_hour,
                 "time_of_day": (
-                    "night" if hour < dawn or hour >= dusk else
-                    "morning" if sunrise <= hour < 10 else
+                    "night" if hour < dawn_hour or hour >= dusk_hour else
+                    "morning" if sunrise_hour <= hour < 10 else
                     "mid-day" if 10 <= hour < 14 else
-                    "afternoon" if 14 <= hour < sunset else
+                    "afternoon" if 14 <= hour < sunset_hour else
                     "evening"
-                ) #A.K.A. TOD (Time Of Day)
+                )
             })
 
         except ValueError as e:
             msg = str(e).lower()
 
-            if "never reaches" in msg or "never sets" in msg:
-                return pd.Series({
-                    "is_day": True,
-                    "time_of_day": "day"
-                }) # Midnight sun case
-
+            # Polar cases that would raise errors
             if "never rises" in msg:
                 return pd.Series({
                     "is_day": False,
                     "time_of_day": "night"
-                }) # Polar night case
+                })
 
-            raise
+            if "never sets" in msg or "never reaches" in msg:
+                return pd.Series({
+                    "is_day": True,
+                    "time_of_day": "day"
+                })
+
+            raise # In case of unexpected errors raise them
 
 
     def _impute_missing_values(self, cols: list[str], data: pd.DataFrame, r: str = "gamma") -> pd.DataFrame:

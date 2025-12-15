@@ -67,5 +67,8 @@ class GlobalConfig(BaseModel):
 
 
 print(torch.version.cuda)
-print(torch.cuda.current_device())
+if torch.cuda.is_available():
+    print("CUDA device:", torch.cuda.current_device())
+else:
+    print("CUDA not available, using CPU")
 print(torch.cuda.is_available())
