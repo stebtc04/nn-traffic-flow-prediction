@@ -341,3 +341,5 @@ dependencies:
       - holidays
       - astral
       - optuna-integration[pytorch_lightning]
+      - tensorboard
+      - tensorboardX

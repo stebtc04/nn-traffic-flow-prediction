@@ -104,6 +104,10 @@ class Preprocessor(BaseModel):
 
             hour = date.hour + date.minute / 60
 
+            is_morning_peak = 6.5 <= hour < 9.5
+            is_evening_peak = 16 <= hour < 19
+            is_peak = is_morning_peak or is_evening_peak
+
             return pd.Series({
                 "is_day": sunrise <= hour < sunset,
                 "time_of_day": (
@@ -112,8 +116,11 @@ class Preprocessor(BaseModel):
                     "mid-day" if 10 <= hour < 14 else
                     "afternoon" if 14 <= hour < sunset else
                     "evening"
-                )  # A.K.A. TOD (Time Of Day)
+                ),  # A.K.A. TOD (Time Of Day) -
+                "is_peak": is_peak,
             })
+        # The modelling of the time of day based on simple hour-of-the-day and not on the sun's position is due to the fact that traffic,
+        # which is a human-related phenomena, is mainly determined by human customs and not by the natural context
 
         except ValueError as e:
             msg = str(e).lower()
