@@ -40,7 +40,7 @@ class Preprocessor(BaseModel):
 
 
     @staticmethod
-    def get_season(date: pd.Timestamp):
+    def get_season(date: pd.Timestamp) -> str:
         return next(
             (season for season, (start, end) in GlobalConfig.SEASONS.items()
              if start <= pd.Timestamp(GlobalConfig.FALLBACK_YEAR, date.month, date.day) <= end),
@@ -48,7 +48,7 @@ class Preprocessor(BaseModel):
         )
 
     @staticmethod
-    def get_daylight_info(date: pd.Timestamp):
+    def get_daylight_info(date: pd.Timestamp) -> pd.Series[dict[str, int | bool]]:
         try:
             s = sun(GlobalConfig.REFERENCE_CITY.observer, date=date)
             return pd.Series({
@@ -77,11 +77,55 @@ class Preprocessor(BaseModel):
             raise #Raising unexpected errors instead of silently hiding them
 
     @staticmethod
-    def get_festivity(date: pd.Timestamp):
+    def get_festivity(date: pd.Timestamp) -> str:
         return next(
             (name for name, d in GlobalConfig.FESTIVITIES.items() if d == date.strftime("%m-%d")),
             None
         )
+
+    @staticmethod
+    def get_time_of_day(date: pd.Timestamp) -> pd.Series[dict[str, bool | str]]:
+        try:
+            s = sun(
+                GlobalConfig.REFERENCE_CITY.observer, #This could change in case of TRPs in different cities or towns
+                date=date.date(),
+                tzinfo=GlobalConfig.REFERENCE_CITY.timezone #The same as above applies here, maybe not in Norway, but yes in bigger countries cases
+            )
+
+            sunrise = s["sunrise"].hour + s["sunrise"].minute / 60
+            sunset = s["sunset"].hour + s["sunset"].minute / 60
+            dawn = s["dawn"].hour + s["dawn"].minute / 60
+            dusk = s["dusk"].hour + s["dusk"].minute / 60
+
+            hour = date.hour + date.minute / 60
+
+            return pd.Series({
+                "is_day": sunrise <= hour < sunset,
+                "time_of_day": (
+                    "night" if hour < dawn or hour >= dusk else
+                    "morning" if sunrise <= hour < 10 else
+                    "mid-day" if 10 <= hour < 14 else
+                    "afternoon" if 14 <= hour < sunset else
+                    "evening"
+                ) #A.K.A. TOD (Time Of Day)
+            })
+
+        except ValueError as e:
+            msg = str(e).lower()
+
+            if "never reaches" in msg or "never sets" in msg:
+                return pd.Series({
+                    "is_day": True,
+                    "time_of_day": "day"
+                }) # Midnight sun case
+
+            if "never rises" in msg:
+                return pd.Series({
+                    "is_day": False,
+                    "time_of_day": "night"
+                }) # Polar night case
+
+            raise
 
 
     def _impute_missing_values(self, cols: list[str], data: pd.DataFrame, r: str = "gamma") -> pd.DataFrame:
@@ -180,6 +224,13 @@ class Preprocessor(BaseModel):
 
         self.data["festivity"] = self.data["date"].apply(self.get_festivity)
         self.data["is_festivity"] = self.data["festivity"].notna()
+
+        self.data["time_of_day"] = self.data["date"].map(self.get_time_of_day)
+        self.data["time_of_day"] = pd.Categorical(
+            self.data["time_of_day"],
+            categories=["night", "morning", "mid-day", "afternoon", "evening"],
+            ordered=True
+        )
 
         self.data.drop(columns=["holiday_name", "festivity"], inplace=True)
 

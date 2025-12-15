@@ -1,7 +1,6 @@
 from _config import TFTConfig, GlobalConfig
 
 from typing import Any
-from metrics import WMAPE, RMSSE
 import warnings
 from pathlib import Path
 import numpy as np
@@ -9,17 +8,26 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from sklearn.metrics import (
+    mean_squared_error,
+    root_mean_squared_error,
+    mean_absolute_error,
+    mean_absolute_percentage_error
+)
+
 import torch
 import lightning.pytorch as pl
 from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch import Trainer, seed_everything
 from pytorch_forecasting.models.base import Prediction
 from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer, QuantileLoss, MultivariateNormalDistributionLoss
-from pytorch_forecasting.metrics import MAE, RMSE, MAPE
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
 from pytorch_forecasting.models.temporal_fusion_transformer.tuning import (
     optimize_hyperparameters,
 )
+
+import optuna
+
 
 warnings.filterwarnings("ignore")  # avoid printing out absolute paths
 
@@ -30,21 +38,23 @@ seed_everything(SEED)
 def train(train_dataset: TimeSeriesDataSet,
           train_dataloader,
           val_dataloader,
+          learning_rate: float = TFTConfig.LEARNING_RATE,
           max_epochs: int = TFTConfig.MAX_EPOCHS,
           model_dir: str = TFTConfig.MODEL_DIR,
+          device: str = GlobalConfig.DEVICE
           ) -> tuple[TemporalFusionTransformer | Trainer]:
 
 
     model = TemporalFusionTransformer.from_dataset(
         train_dataset,
-        learning_rate=TFTConfig.LEARNING_RATE,
-        hidden_size=16, #TODO 16
-        attention_head_size=8, #TODO 8
+        learning_rate=learning_rate,
+        hidden_size=16, #NOTE 16
+        attention_head_size=8, #NOTE 8
         dropout=0.01,
         hidden_continuous_size=16,
         loss=QuantileLoss(quantiles=[0.5]), #Using the median (0.5 quantile)
-        reduce_on_plateau_patience=8, #TODO 8
-    ).to(GlobalConfig.DEVICE) #TODO 12
+        reduce_on_plateau_patience=8, #NOTE 8
+    ).to(device) #NOTE 12
 
     # Callbacks
     checkpoint_callback = ModelCheckpoint(
@@ -89,12 +99,11 @@ def evaluate(
     test_dataloader
 ) -> tuple[dict[str, Any], Prediction]:
 
-    # TFT built-in prediction (kept as you had it)
     preds_data = model.predict(
         test_dataloader,
         return_index=True,
         trainer_kwargs=dict(accelerator=GlobalConfig.DEVICE)
-    )
+    ) # TFT built-in prediction
 
     actuals = []
     preds = []
@@ -105,7 +114,6 @@ def evaluate(
 
     with torch.no_grad():
         for x, y in test_dataloader:
-            # move inputs to device
             x = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in x.items()}
 
             out = model(x)
@@ -131,30 +139,29 @@ def evaluate(
         preds = np.concatenate(preds, axis=0)
         actuals = np.concatenate(actuals, axis=0)
 
-        metrics = {"MAE": [], "RMSE": [], "MAPE": []}
+        metrics = {
+            "MAE": [],
+            "MSE": [],
+            "RMSE": [],
+            "MAPE": []
+        }
 
         for i in range(actuals.shape[-1]):
             y_true = actuals[..., i].ravel()
             y_pred = preds[..., i].ravel()
 
-            mae = np.mean(np.abs(y_true - y_pred))
-            rmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
-            mape = (
-                np.mean(
-                    np.abs(
-                        (y_true - y_pred)
-                        / np.where(y_true == 0, 1e-8, y_true)
-                    )
-                ) * 100
-            )
-
-            metrics["MAE"].append(mae)
-            metrics["RMSE"].append(rmse)
-            metrics["MAPE"].append(mape)
+            metrics["MAE"].append(mean_absolute_error(y_pred=y_pred, y_true=y_true))
+            metrics["MSE"].append(mean_squared_error(y_pred=y_pred, y_true=y_true))
+            metrics["RMSE"].append(root_mean_squared_error(y_pred=y_pred, y_true=y_true))
+            metrics["MAPE"].append(mean_absolute_percentage_error(y_pred=y_pred, y_true=y_true))
 
         metrics_summary = {
             **{
                 f"MAE_{TFTConfig.TARGET_COLS[i]}": metrics["MAE"][i]
+                for i in range(len(TFTConfig.TARGET_COLS))
+            },
+            **{
+                f"MSE_{TFTConfig.TARGET_COLS[i]}": metrics["MSE"][i]
                 for i in range(len(TFTConfig.TARGET_COLS))
             },
             **{
@@ -193,7 +200,91 @@ def plot_predictions(preds_df: pd.DataFrame, actuals: pd.DataFrame, target: str)
     return None
 
 
+def tune_hyperparameters(
+    train_dataloader,
+    val_dataloader,
+    model_dir: str = TFTConfig.MODEL_DIR,
+    n_trials: int = 20,
+    max_epochs: int = TFTConfig.MAX_EPOCHS,
+    timeout: float | None = None,
+    trainer_kwargs: dict | None = None,
+    verbose: bool = True,
+    pruner = None,
+    **tft_kwargs
+) -> dict[str, Any]:
+    """
+    Runs hyperparameter optimization using pytorch_forecasting.optimize_hyperparameters
+    Returns a dictionary with:
+      - best_params
+      - best_value
+      - best_trial_number
+      - trial_history (list of per-trial dicts)
+      - study (the optuna.Study object) which can be useful for deeper inspection
 
+    Prints a readable dictionary of the best result and prints trial-by-trial steps
+    (uses study.trials_dataframe()) so you can see exactly what happened.
+    """
+    if trainer_kwargs is None:
+        trainer_kwargs = {}
+
+    # Default timeout if not specified (8 hours like the function default)
+    if timeout is None:
+        timeout = 3600 * 8.0
+
+    study = optimize_hyperparameters(
+        train_dataloaders=train_dataloader,
+        val_dataloaders=val_dataloader,
+        model_path=model_dir,
+        max_epochs=max_epochs,
+        n_trials=n_trials,
+        timeout=timeout,
+        trainer_kwargs=trainer_kwargs,
+        verbose=verbose,
+        pruner=pruner,
+        **tft_kwargs,
+    )
+
+    # Extraction of the best parameters and info
+    best_trial = study.best_trial
+    best_params = study.best_params if hasattr(study, "best_params") else best_trial.params
+    best_value = study.best_value if hasattr(study, "best_value") else best_trial.value
+    best_trial_number = best_trial.number if best_trial is not None else None
+
+    try:
+        trials_df = study.trials_dataframe() # Getting full trial history as a DataFrame
+    except:
+        # As a fallback we can convert single trials from dictionaries to dataframe records
+        trials = study.trials
+        trials_df = pd.DataFrame(({
+            "number": t.number,
+            "value": t.value,
+            "state": str(t.state),
+            "params": t.params,
+            "datetime_start": getattr(t, "datetime_start", None),
+            "datetime_complete": getattr(t, "datetime_complete", None),
+            "duration": (getattr(t, "datetime_complete", None) - getattr(t, "datetime_start", None)).total_seconds() if getattr(t, "datetime_start", None) and getattr(t, "datetime_complete", None) else None,
+            "intermediate_values": t.intermediate_values if hasattr(t, "intermediate_values") else {},
+        } for t in trials)) # If it wasn't possible to get a full trial history then build the dataframe from scratch
+
+    # Convert DataFrame into a list of dicts for easy printing / saving
+    trial_history = trials_df.to_dict(orient="records")
+    results = {
+        "best_params": best_params,
+        "best_value": best_value,
+        "best_trial_number": best_trial_number,
+        "n_trials_ran": len(trial_history),
+        "trial_history": trial_history,
+        # include the study object for any deeper post-inspection if desired
+        "study": study,
+    }
+
+    print("******** Hyperparameter tuning summary ********")
+    print(results)
+
+    print("\n=== Trial-by-trial details ===")
+    print(trials_df)
+
+    return results
 
 
 

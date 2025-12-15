@@ -53,6 +53,11 @@ if __name__ == "__main__":
 
     plot_training(trainer=trainer)
 
+    tuning_results = tune_hyperparameters(
+        train_dataloader=train_dl,
+        val_dataloader=val_dl
+    )
+
     print("Model saved to:", trainer.checkpoint_callback.best_model_path) # Save best model checkpoint path
 
     preds_out_path = Path(TFTConfig.MODEL_DIR) / "predictions.csv"
