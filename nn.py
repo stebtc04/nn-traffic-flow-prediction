@@ -178,15 +178,101 @@ def evaluate(
 
 
 def plot_training(
-        #model: TemporalFusionTransformer,
-        trainer: Trainer
+        model: TemporalFusionTransformer,
+        val_dl,
 ) -> None:
-    try:
-        metrics = trainer.callback_metrics
-        print("Training metrics:", metrics)
-    except:
-        print("No training metrics available to plot")
+
+    model.to(GlobalConfig.DEVICE)
+    model.eval()
+
+    # Raw predictions give access to individual targets and quantiles
+    raw_predictions, x = model.predict(
+        val_dl,
+        mode="raw",
+        return_x=True,
+    )
+
+    # raw_predictions["prediction"] shape:
+    # [batch, prediction_length, n_targets, n_quantiles]
+
+    quantiles = model.loss.quantiles
+    median_idx = quantiles.index(0.5)
+
+    MAX_PLOTS = 3
+
+    for idx in range(min(MAX_PLOTS, raw_predictions["prediction"].shape[0])):
+        n_targets = raw_predictions["prediction"].shape[2]
+
+        fig, axes = plt.subplots(
+            n_targets, 1, figsize=(12, 4 * n_targets), sharex=True
+        )
+
+        if n_targets == 1:
+            axes = [axes]
+
+        for t, ax in enumerate(axes):
+            actuals = (
+                x["decoder_target"][idx, :, t]
+                .detach()
+                .cpu()
+                .numpy()
+            ) # Ground truth
+            ax.plot(actuals, label="Actual", color="black")
+
+
+            preds = (
+                raw_predictions["prediction"][idx, :, t, median_idx]
+                .detach()
+                .cpu()
+                .numpy()
+            ) # Median prediction taken as reference
+            ax.plot(preds, label="Prediction (P50)")
+
+            if len(quantiles) > 1:
+                lower = (
+                    raw_predictions["prediction"][idx, :, t, 0]
+                    .detach()
+                    .cpu()
+                    .numpy()
+                ) # Prediction interval (if more than one quantile) lower bound
+                upper = (
+                    raw_predictions["prediction"][idx, :, t, -1]
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )  # Prediction interval (if more than one quantile) upper bound
+                ax.fill_between(
+                    range(len(preds)),
+                    lower,
+                    upper,
+                    alpha=0.3,
+                    label="Prediction Interval",
+                )
+
+            ax.set_title(f"{TFTConfig.TARGET_COLS[t]} – Forecast")
+            ax.set_ylabel("Value")
+            ax.legend()
+            ax.grid(True)
+
+        axes[-1].set_xlabel("Prediction Time Step")
+        fig.suptitle(f"TFT Forecast – Sample {idx + 1}", fontsize=14)
+        plt.tight_layout()
+        plt.show()
+
+        # model.plot_prediction(x, raw_predictions, idx=0)
+
+
+
     return None
+
+
+
+
+
+
+
+
+
 
 
 def plot_predictions(preds_df: pd.DataFrame, actuals: pd.DataFrame, target: str) -> None:

@@ -15,13 +15,10 @@ Known time-varying features (provided to the model):
 
 """
 
-from _config import TFTConfig, GlobalConfig
 from prep import *
 from nn import *
 
 import os
-import datetime
-from typing import Literal
 from pathlib import Path
 import pandas as pd
 
@@ -51,7 +48,16 @@ if __name__ == "__main__":
     for k, v in metrics_summary.items():
         print(f"  {k}: {v:.4f}")
 
-    plot_training(trainer=trainer)
+    try:
+        metrics = trainer.callback_metrics
+        print("Training metrics:", metrics)
+    except:
+        print("No training metrics available")
+
+    plot_training(
+        model=model,
+        val_dl=val_dl
+    )
 
     tuning_results = tune_hyperparameters(
         train_dataloader=train_dl,

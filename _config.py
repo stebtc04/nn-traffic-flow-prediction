@@ -13,7 +13,7 @@ class TFTConfig(BaseModel):
     ENCODER_LENGTH: ClassVar[int] = 168  # lookback (e.g., last 168 hours = 7 days hourly)
     DECODER_LENGTH: ClassVar[int] = 24  # forecast horizon (e.g., next 24 hours)
     BATCH_SIZE: ClassVar[int] = 128 #TODO 128
-    MAX_EPOCHS: ClassVar[int] = 7 #TODO 30
+    MAX_EPOCHS: ClassVar[int] = 50 #TODO 30
     LEARNING_RATE: ClassVar[float] = 3e-4 #3e-4
     DATE_COL: ClassVar[str] = "date"  # YYYY-MM-DD or similar
     TIME_COL: ClassVar[str] = "hour_start"  # hour as padded int
