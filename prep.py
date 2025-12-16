@@ -48,7 +48,7 @@ class Preprocessor(BaseModel):
         )
 
     @staticmethod
-    def get_daylight_info(date: pd.Timestamp) -> pd.Series:# pd.Series[dict[str, float | bool]]
+    def get_daylight_info(date: pd.Timestamp) -> pd.Series: # pd.Series[dict[str, float | bool]]
         try:
             s = sun(GlobalConfig.REFERENCE_CITY.observer, date=date)
             return pd.Series({
@@ -118,8 +118,8 @@ class Preprocessor(BaseModel):
                 ),  # A.K.A. TOD (Time Of Day)
                 "is_peak": bool(is_morning_peak or is_evening_peak),
             })
-        # The modelling of the time of day based on simple hour-of-the-day and not on the sun's position is due to the fact that traffic,
-        # which is a human-related phenomena, is mainly determined by human customs and not by the natural context
+            # The modelling of the time of day based on simple hour-of-the-day and not on the sun's position is due to the fact that traffic,
+            # which is a human-related phenomena, is mainly determined by human customs and not by the natural context
 
         except ValueError as e:
             msg = str(e).lower()
@@ -152,25 +152,12 @@ class Preprocessor(BaseModel):
             raise ValueError(
                 f"Regressor type '{r}' is not supported. Must be one of: {cast(dict, RegressorTypes.model_fields).keys()}")
 
-        reg = None
-        if r == "lasso":
-            reg = ZeroInflatedRegressor(
-                regressor=Lasso(random_state=100, fit_intercept=True),
-                classifier=DecisionTreeClassifier(random_state=100)
-            )  # Using Lasso regression (L1 Penalization) to get better results in case of non-informative columns present in the data (coverage data, because their values all the same)
-        elif r == "gamma":
-            reg = ZeroInflatedRegressor(
+        # Using Gamma regression to address for the zeros present in the data (which will need to be predicted as well)
+        mice_imputer = IterativeImputer(
+            estimator=ZeroInflatedRegressor(
                 regressor=GammaRegressor(fit_intercept=True, verbose=0),
                 classifier=DecisionTreeClassifier(random_state=100)
-            )  # Using Gamma regression to address for the zeros present in the data (which will need to be predicted as well)
-        elif r == "quantile":
-            reg = ZeroInflatedRegressor(
-                regressor=QuantileRegressor(fit_intercept=True),
-                classifier=DecisionTreeClassifier(random_state=100)
-            )
-
-        mice_imputer = IterativeImputer(
-            estimator=reg,
+            ),
             random_state=100,
             verbose=0,
             imputation_order="roman",

@@ -2,11 +2,9 @@ from _config import TFTConfig, GlobalConfig
 
 from typing import Any
 import warnings
-from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 from sklearn.metrics import (
     mean_squared_error,
@@ -20,7 +18,7 @@ import lightning.pytorch as pl
 from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch import Trainer, seed_everything
 from pytorch_forecasting.models.base import Prediction
-from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer, QuantileLoss, MultivariateNormalDistributionLoss
+from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer, QuantileLoss
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
 from pytorch_forecasting.models.temporal_fusion_transformer.tuning import (
     optimize_hyperparameters,
@@ -179,7 +177,10 @@ def evaluate(
     return metrics_summary, preds_data
 
 
-def plot_training(trainer: Trainer) -> None:
+def plot_training(
+        #model: TemporalFusionTransformer,
+        trainer: Trainer
+) -> None:
     try:
         metrics = trainer.callback_metrics
         print("Training metrics:", metrics)

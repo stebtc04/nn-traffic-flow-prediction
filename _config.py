@@ -5,8 +5,8 @@ from holidays import HolidayBase
 import holidays
 from astral import LocationInfo
 
-
 import torch
+
 
 class TFTConfig(BaseModel):
     MODEL_DIR: ClassVar[str] = "./tft_checkpoints"
@@ -60,7 +60,7 @@ class GlobalConfig(BaseModel):
         "Christmas": "12-25",
         "NewYear": "01-01",
         "Halloween": "10-31",
-        "IndependenceDay": "07-04"
+        "IndependenceDay": "05-17"
     }
 
     class Config:
