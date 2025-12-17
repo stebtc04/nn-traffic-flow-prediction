@@ -22,6 +22,8 @@ import os
 from pathlib import Path
 import pandas as pd
 
+
+
 def init() -> None:
     os.makedirs(TFTConfig.MODEL_DIR, exist_ok=True)
     return None
@@ -35,6 +37,7 @@ if __name__ == "__main__":
     prep = Preprocessor(data=load(Path.cwd() / "47408V625213_speeds.csv"))
 
     prep.standard_preprocess()
+    std_preprocessed_data = prep.data
     train_ds, val_ds, test_ds, train_dl, val_dl, test_dl = prep.nn_preprocess()
 
     model, trainer = train(
@@ -59,18 +62,30 @@ if __name__ == "__main__":
         val_dl=val_dl
     )
 
-    tuning_results = tune_hyperparameters(
-        train_dataloader=train_dl,
-        val_dataloader=val_dl
+    #tuning_results = tune_hyperparameters(
+    #    train_dataloader=train_dl,
+    #    val_dataloader=val_dl
+    #)
+
+    future_dl = get_future_dataloader_from_train(
+        train_dataset=val_ds,
+        data=std_preprocessed_data,
+        batch_size=128
     )
 
+    future_results = predict_future(
+        model=model,
+        future_dataloader=future_dl
+    )
+
+    print(future_results["dataframe"])
     print("Model saved to:", trainer.checkpoint_callback.best_model_path) # Save best model checkpoint path
 
     preds_out_path = Path(TFTConfig.MODEL_DIR) / "predictions.csv"
     try:
         preds_df.to_csv(preds_out_path, index=False)
         print(f"Predictions exported to {preds_out_path}")
-    except Exception:
+    except:
         print("Failed to export predictions DataFrame (format may not be pandas).")
 
 

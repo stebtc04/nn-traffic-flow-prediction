@@ -14,6 +14,7 @@ from sklearn.metrics import (
 )
 
 import torch
+from torch.utils.data import DataLoader
 import lightning.pytorch as pl
 from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch import Trainer, seed_everything
@@ -34,8 +35,8 @@ seed_everything(SEED)
 
 
 def train(train_dataset: TimeSeriesDataSet,
-          train_dataloader,
-          val_dataloader,
+          train_dataloader: DataLoader,
+          val_dataloader: DataLoader,
           learning_rate: float = TFTConfig.LEARNING_RATE,
           max_epochs: int = TFTConfig.MAX_EPOCHS,
           model_dir: str = TFTConfig.MODEL_DIR,
@@ -46,10 +47,10 @@ def train(train_dataset: TimeSeriesDataSet,
     model = TemporalFusionTransformer.from_dataset(
         train_dataset,
         learning_rate=learning_rate,
-        hidden_size=16, #NOTE 16
-        attention_head_size=8, #NOTE 8
-        dropout=0.01,
-        hidden_continuous_size=16,
+        hidden_size=45, #NOTE 16
+        attention_head_size=3, #NOTE 8
+        dropout=0.11013129302802382, #NOTE 0.01,
+        hidden_continuous_size=26, #NOTE 16,
         loss=QuantileLoss(quantiles=[0.5]), #Using the median (0.5 quantile)
         reduce_on_plateau_patience=8, #NOTE 8
     ).to(device) #NOTE 12
@@ -68,12 +69,12 @@ def train(train_dataset: TimeSeriesDataSet,
         accelerator="auto",
         devices="auto",
         callbacks=[
-            EarlyStopping(monitor="val_loss", patience=8, mode="min"),
+            EarlyStopping(monitor="val_loss", patience=8, mode="min"), #TODO 16
             checkpoint_callback,
             LearningRateMonitor()
         ],
         default_root_dir=model_dir,
-        gradient_clip_val=0.1
+        gradient_clip_val=0.8762948027181958, #NOTE 0.1
     )
 
     trainer.fit(
@@ -94,7 +95,7 @@ def train(train_dataset: TimeSeriesDataSet,
 
 def evaluate(
     model: TemporalFusionTransformer,
-    test_dataloader
+    test_dataloader: DataLoader
 ) -> tuple[dict[str, Any], Prediction]:
 
     preds_data = model.predict(
@@ -177,14 +178,9 @@ def evaluate(
     return metrics_summary, preds_data
 
 
-
-
-
-
-
 def plot_training(
         model: TemporalFusionTransformer,
-        val_dl,
+        val_dl: DataLoader,
 ) -> None:
 
     model.to(GlobalConfig.DEVICE)
@@ -300,16 +296,6 @@ def plot_training(
     return None
 
 
-
-
-
-
-
-
-
-
-
-
 def plot_predictions(preds_df: pd.DataFrame, actuals: pd.DataFrame, target: str) -> None:
     plt.figure(figsize=(12, 6))
     if target in actuals.columns:
@@ -323,15 +309,15 @@ def plot_predictions(preds_df: pd.DataFrame, actuals: pd.DataFrame, target: str)
 
 
 def tune_hyperparameters(
-    train_dataloader,
-    val_dataloader,
+    train_dataloader: DataLoader,
+    val_dataloader: DataLoader,
     model_dir: str = TFTConfig.MODEL_DIR,
     n_trials: int = 20,
     max_epochs: int = TFTConfig.MAX_EPOCHS,
     timeout: float | None = None,
     trainer_kwargs: dict | None = None,
     verbose: bool = True,
-    pruner = None,
+    pruner: Any | None = None,
     **tft_kwargs
 ) -> dict[str, Any]:
     """
@@ -410,7 +396,125 @@ def tune_hyperparameters(
 
 
 
+def get_future_dataloader_from_train(
+    train_dataset: TimeSeriesDataSet,
+    data: pd.DataFrame,
+    batch_size: int = 64,
+    num_workers: int = 0
+) -> DataLoader:
+    """
+    Creates a future dataloader compatible with a pretrained trained TFT model.
+    """
 
+    predict_dataset = TimeSeriesDataSet.from_dataset(
+        train_dataset,
+        data,
+        predict=True,
+        stop_randomization=True
+    )
+
+    future_dataloader = predict_dataset.to_dataloader(
+        train=False,
+        batch_size=batch_size,
+        num_workers=num_workers
+    )
+
+    return future_dataloader
+
+
+
+def predict_future(
+    model: TemporalFusionTransformer,
+    future_dataloader: DataLoader,
+    device: str = GlobalConfig.DEVICE
+) -> dict[str, Any]:
+    """
+    Predict future values for each target feature.
+    """
+
+    model.to(device)
+    model.eval()
+
+    pred = model.predict(
+        future_dataloader,
+        mode="raw",
+        return_x=True,
+        return_index=True,
+        trainer_kwargs=dict(accelerator=device)
+    )
+
+    raw_preds = pred.output["prediction"]
+
+    if isinstance(raw_preds, list):
+        preds = torch.stack(raw_preds, dim=2) # Prediction output shape normalization
+    else:
+        preds = raw_preds
+
+    if preds.dim() == 4:
+        quantiles = model.loss.quantiles
+        q = [float(v) if isinstance(v, (int, float)) else float(v[0]) for v in quantiles] # Quantile handling (median)
+        median_idx = q.index(0.5) if 0.5 in q else int(np.argmin(np.abs(np.array(q) - 0.5)))
+        preds = preds[..., median_idx]
+
+    preds = preds.detach().cpu().numpy()
+    predictions_index = pred.index.copy() # Index of the predictions' dataframe
+
+    # Determine horizon and number of sequences
+    if preds.ndim == 3:
+        n_sequences, horizon, n_targets = preds.shape # Expected preds shape: (n_sequences, horizon, n_targets)
+    elif preds.ndim == 2:
+        n_sequences = preds.shape[0]
+        horizon = 1
+        n_targets = preds.shape[1]
+        preds = preds.reshape(n_sequences, horizon, n_targets)
+    else:
+        raise ValueError(f"Unexpected preds ndim: {preds.ndim}. Expected 2 or 3.")
+
+    flat_preds = preds.reshape(-1, n_targets)  # (n_sequences * horizon, n_targets)
+
+    len_index = len(predictions_index)
+    expected_flat_len = n_sequences * horizon
+
+    rows = []
+
+    if len_index == expected_flat_len: # The index has one entry per predicted step (original assumption) case
+        for i in range(n_sequences):
+            for t in range(horizon):
+                idx = i * horizon + t
+                row = predictions_index.iloc[idx].to_dict()
+                for j, name in enumerate(TFTConfig.TARGET_COLS):
+                    row[name] = preds[i, t, j]
+                rows.append(row)
+
+    elif len_index == n_sequences: # The index has one entry per sequence (repeat for each horizon step) case
+        for i in range(n_sequences):
+            base_row = predictions_index.iloc[i].to_dict()
+            for t in range(horizon):
+                row = base_row.copy()
+                for j, name in enumerate(TFTConfig.TARGET_COLS):
+                    row[name] = preds[i, t, j]
+                rows.append(row)
+
+    elif len_index == flat_preds.shape[0]: # The index already matches flattened predictions: map one-to-one case
+        for idx in range(flat_preds.shape[0]):
+            row = predictions_index.iloc[idx].to_dict()
+            for j, name in enumerate(TFTConfig.TARGET_COLS):
+                row[name] = flat_preds[idx, j]
+            rows.append(row)
+
+    else: # Fallback: map up to the minimum length and warn the user
+        n_map = min(len_index, expected_flat_len)
+        for idx in range(n_map):
+            row = predictions_index.iloc[idx].to_dict()
+            for j, name in enumerate(TFTConfig.TARGET_COLS):
+                row[name] = flat_preds[idx, j]
+            rows.append(row)
+
+    return {
+        "predictions": preds,
+        "dataframe": pd.DataFrame(rows),
+        "raw": pred
+    }
 
 
 

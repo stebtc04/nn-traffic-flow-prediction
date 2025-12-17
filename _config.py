@@ -12,9 +12,9 @@ class TFTConfig(BaseModel):
     MODEL_DIR: ClassVar[str] = "./tft_checkpoints"
     ENCODER_LENGTH: ClassVar[int] = 168  # lookback (e.g., last 168 hours = 7 days hourly)
     DECODER_LENGTH: ClassVar[int] = 24  # forecast horizon (e.g., next 24 hours)
-    BATCH_SIZE: ClassVar[int] = 128 #TODO 128
-    MAX_EPOCHS: ClassVar[int] = 50 #TODO 30
-    LEARNING_RATE: ClassVar[float] = 3e-4 #3e-4
+    BATCH_SIZE: ClassVar[int] = 128 #NOTE 128
+    MAX_EPOCHS: ClassVar[int] = 50 #NOTE 21 -> 80
+    LEARNING_RATE: ClassVar[float] = 0.0008912509381337457 #NOTE 3e-4
     DATE_COL: ClassVar[str] = "date"  # YYYY-MM-DD or similar
     TIME_COL: ClassVar[str] = "hour_start"  # hour as padded int
     TARGET_COLS: ClassVar[list[str]] = ["volume", "mean_speed", "percentile_85"]
