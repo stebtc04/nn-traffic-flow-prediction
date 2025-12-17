@@ -177,6 +177,11 @@ def evaluate(
     return metrics_summary, preds_data
 
 
+
+
+
+
+
 def plot_training(
         model: TemporalFusionTransformer,
         val_dl,
@@ -185,85 +190,115 @@ def plot_training(
     model.to(GlobalConfig.DEVICE)
     model.eval()
 
-    # Raw predictions give access to individual targets and quantiles
-    raw_predictions, x = model.predict(
+    pred = model.predict(
         val_dl,
         mode="raw",
         return_x=True,
     )
 
-    # raw_predictions["prediction"] shape:
-    # [batch, prediction_length, n_targets, n_quantiles]
+    x = pred.x
+    pred_tensor = pred.output["prediction"]
 
-    quantiles = model.loss.quantiles
-    median_idx = quantiles.index(0.5)
+    # Predictions can be:
+    # - Tensor [batch, time, target]
+    # - Tensor [batch, time, target, quantile]
+    # - List[Tensor] (one per target)
+    if isinstance(pred_tensor, list):
+        # stack targets -> [batch, time, target, (quantile?)]
+        pred_tensor = torch.stack(pred_tensor, dim=2)
 
-    MAX_PLOTS = 3
+    # ---- Quantile handling ----
+    quantiles = getattr(model.loss, "quantiles", None)
+    use_quantiles = False
+    median_idx = None
 
-    for idx in range(min(MAX_PLOTS, raw_predictions["prediction"].shape[0])):
-        n_targets = raw_predictions["prediction"].shape[2]
+    if quantiles is not None:
+        try:
+            q = [float(v) for v in quantiles]
+        except:
+            q = []
+
+        if len(q) > 1:
+            use_quantiles = True
+            if 0.5 in q:
+                median_idx = q.index(0.5)
+            else:
+                median_idx = int(np.argmin(np.abs(np.array(q) - 0.5)))
+
+    MAX_PLOTS = 3 # One plot for each target feature
+    batch_size = pred_tensor.shape[0]
+
+    decoder_target = x["decoder_target"] # Extracting the decoded target features
+
+    # decoder_target is, generally speaking, a List[Tensor], one per target
+    if isinstance(decoder_target, list): # Ensuring that the shape is [batch, time] for each target
+        gt_targets = []
+        for t in decoder_target:
+            if t.dim() == 3 and t.shape[-1] == 1:
+                t = t.squeeze(-1)
+            gt_targets.append(t)
+        n_targets = len(gt_targets)
+    else:
+        # Tensor case, where the shape is: [batch, time, target] or [batch, time]
+        if decoder_target.dim() == 2:
+            gt_targets = [decoder_target]
+            n_targets = 1
+        else:
+            gt_targets = [decoder_target[:, :, i] for i in range(decoder_target.shape[2])]
+            n_targets = decoder_target.shape[2]
+
+    # Plotting section
+    for idx in range(min(MAX_PLOTS, batch_size)):
 
         fig, axes = plt.subplots(
-            n_targets, 1, figsize=(12, 4 * n_targets), sharex=True
+            n_targets, 1,
+            figsize=(12, 4 * n_targets),
+            sharex=True
         )
 
         if n_targets == 1:
             axes = [axes]
 
         for t, ax in enumerate(axes):
-            actuals = (
-                x["decoder_target"][idx, :, t]
-                .detach()
-                .cpu()
-                .numpy()
-            ) # Ground truth
-            ax.plot(actuals, label="Actual", color="black")
 
+            # Ground truth
+            gt = gt_targets[t][idx].detach().cpu().numpy()
+            ax.plot(gt, label="Ground truth", color="black")
 
-            preds = (
-                raw_predictions["prediction"][idx, :, t, median_idx]
-                .detach()
-                .cpu()
-                .numpy()
-            ) # Median prediction taken as reference
+            # Prediction
+            if use_quantiles and pred_tensor.ndim == 4:
+                preds = pred_tensor[idx, :, t, median_idx]
+            else:
+                preds = pred_tensor[idx, :, t]
+
+            preds = preds.detach().cpu().numpy()
             ax.plot(preds, label="Prediction (P50)")
 
-            if len(quantiles) > 1:
-                lower = (
-                    raw_predictions["prediction"][idx, :, t, 0]
-                    .detach()
-                    .cpu()
-                    .numpy()
-                ) # Prediction interval (if more than one quantile) lower bound
-                upper = (
-                    raw_predictions["prediction"][idx, :, t, -1]
-                    .detach()
-                    .cpu()
-                    .numpy()
-                )  # Prediction interval (if more than one quantile) upper bound
+            # Prediction interval
+            if use_quantiles and pred_tensor.ndim == 4:
+                lower = pred_tensor[idx, :, t, 0].detach().cpu().numpy()
+                upper = pred_tensor[idx, :, t, -1].detach().cpu().numpy()
+
                 ax.fill_between(
                     range(len(preds)),
                     lower,
                     upper,
                     alpha=0.3,
-                    label="Prediction Interval",
+                    label="Prediction Interval"
                 )
 
             ax.set_title(f"{TFTConfig.TARGET_COLS[t]} – Forecast")
             ax.set_ylabel("Value")
-            ax.legend()
             ax.grid(True)
+            ax.legend()
 
         axes[-1].set_xlabel("Prediction Time Step")
         fig.suptitle(f"TFT Forecast – Sample {idx + 1}", fontsize=14)
         plt.tight_layout()
         plt.show()
 
-        # model.plot_prediction(x, raw_predictions, idx=0)
-
-
-
     return None
+
 
 
 
