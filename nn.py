@@ -296,18 +296,6 @@ def plot_training(
     return None
 
 
-def plot_predictions(preds_df: pd.DataFrame, actuals: pd.DataFrame, target: str) -> None:
-    plt.figure(figsize=(12, 6))
-    if target in actuals.columns:
-        plt.plot(actuals['timestamp'], actuals[target], label='actual')
-    if f"prediction_{target}" in preds_df.columns:
-        plt.plot(preds_df['timestamp'], preds_df[f"prediction_{target}"], label='prediction')
-    plt.title(f"Actual vs Prediction for {target}")
-    plt.legend()
-    plt.show()
-    return None
-
-
 def tune_hyperparameters(
     train_dataloader: DataLoader,
     val_dataloader: DataLoader,
