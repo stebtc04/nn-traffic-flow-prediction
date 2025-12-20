@@ -6,6 +6,8 @@ authors:
     orcid: https://orcid.org/0009-0005-7523-7103
   - family-names: Tuzi
     given-names: Simone
+  - family-names: Gioia
+    given-names: Flavio
 title: "Neural Networks Traffic Flow Prediction"
 version: 1.0
 license: MIT
