@@ -118,7 +118,7 @@ class Preprocessor(BaseModel):
                 ),  # A.K.A. TOD (Time Of Day)
                 "is_peak": bool(is_morning_peak or is_evening_peak),
             })
-            # The modelling of the time of day based on simple hour-of-the-day and not on the sun's position is due to the fact that traffic,
+            # The modeling of the time of day based on simple hour-of-the-day and not on the sun's position is due to the fact that traffic,
             # which is a human-related phenomena, is mainly determined by human customs and not by the natural context
 
         except ValueError as e:
