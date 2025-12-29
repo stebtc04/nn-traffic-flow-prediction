@@ -7,9 +7,10 @@ from typing import cast
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel
+from pydantic.types import PositiveFloat
 from astral.sun import sun
 
-from sklearn.linear_model import Lasso, GammaRegressor, QuantileRegressor
+from sklearn.linear_model import GammaRegressor
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
 from sklearn.tree import DecisionTreeClassifier
@@ -84,7 +85,15 @@ class Preprocessor(BaseModel):
         )
 
     @staticmethod
-    def get_time_of_day(date: pd.Timestamp) -> pd.Series: # pd.Series[dict[str, bool | str]]:
+    def _get_is_peak(hour: PositiveFloat) -> bool:
+        is_morning_peak = 6.5 <= hour < 9.5
+        is_evening_peak = 16 <= hour < 19
+        return bool(is_morning_peak or is_evening_peak)
+
+
+    def get_time_of_day(self, date: pd.Timestamp) -> pd.Series: # pd.Series[dict[str, bool | str]]:
+        hour = date.hour + date.minute / 60
+
         try:
             s = sun(
                 GlobalConfig.REFERENCE_CITY.observer,  # This could change in case of TRPs in different cities or towns
@@ -102,11 +111,6 @@ class Preprocessor(BaseModel):
             dawn = s["dawn"].hour + s["dawn"].minute / 60
             dusk = s["dusk"].hour + s["dusk"].minute / 60
 
-            hour = date.hour + date.minute / 60
-
-            is_morning_peak = 6.5 <= hour < 9.5
-            is_evening_peak = 16 <= hour < 19
-
             return pd.Series({
                 "is_day": sunrise <= hour < sunset,
                 "time_of_day": (
@@ -116,7 +120,7 @@ class Preprocessor(BaseModel):
                     "afternoon" if 14 <= hour < sunset else
                     "evening"
                 ),  # A.K.A. TOD (Time Of Day)
-                "is_peak": bool(is_morning_peak or is_evening_peak),
+                "is_peak": self._get_is_peak(hour)
             })
             # The modeling of the time of day based on simple hour-of-the-day and not on the sun's position is due to the fact that traffic,
             # which is a human-related phenomena, is mainly determined by human customs and not by the natural context
@@ -131,7 +135,8 @@ class Preprocessor(BaseModel):
             ]):
                 return pd.Series({
                     "is_day": True,
-                    "time_of_day": "day"
+                    "time_of_day": "day",
+                    "is_peak": self._get_is_peak(hour)
                 })  # Midnight sun case
 
             if any(case in msg for case in
@@ -141,7 +146,8 @@ class Preprocessor(BaseModel):
             ]):
                 return pd.Series({
                     "is_day": False,
-                    "time_of_day": "night"
+                    "time_of_day": "night",
+                    "is_peak": self._get_is_peak(hour)
                 })  # Polar night case
 
             raise
